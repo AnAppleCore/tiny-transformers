@@ -81,8 +81,10 @@ def get_weights_file(weights_file):
     return weights_file
 
 
-def train_epoch(loader, model, ema, loss_fun, optimizer, scheduler, scaler, meter, cur_epoch):
+def train_epoch(loader, model, ema, loss_fun, optimizer, scheduler, scaler, meter, cur_epoch, space_loader=None, space_counter=0):
     data_loader.shuffle(loader, cur_epoch)
+    if space_loader is not None:
+        data_loader.shuffle(space_loader, cur_epoch)
     lr = optim.get_current_lr(optimizer)
     model.train()
     ema.train()
@@ -93,34 +95,107 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scheduler, scaler, mete
         offline_features = [f.cuda() for f in offline_features]
         labels_one_hot = net.smooth_one_hot_labels(labels)
         inputs, labels_one_hot, labels = net.mixup(inputs, labels_one_hot)
-        with amp.autocast(enabled=cfg.TRAIN.MIXED_PRECISION):
-            preds = model(inputs)
-            loss_cls = loss_fun(preds, labels_one_hot)
-            loss, loss_inter, loss_logit = loss_cls, inputs.new_tensor(0.0), inputs.new_tensor(0.0)
-            if hasattr(net.unwrap_model(model), 'guidance_loss'):
-                loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
-                if cfg.DISTILLATION.ENABLE_LOGIT:
-                    loss_cls = loss_cls * (1 - cfg.DISTILLATION.LOGIT_WEIGHT)
-                    loss_logit = loss_logit * cfg.DISTILLATION.LOGIT_WEIGHT
-                    loss = loss_cls + loss_logit
-                if cfg.DISTILLATION.ENABLE_INTER:
-                    loss_inter = loss_inter * cfg.DISTILLATION.INTER_WEIGHT
-                    loss = loss_cls + loss_inter
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        net.update_model_ema(model, ema, cur_epoch, cur_iter)
-        top1_err, top5_err = meters.topk_errors(preds, labels, [1, 5])
-        loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = dist.scaled_all_reduce([loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err])
-        loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = loss_cls.item(), loss_inter.item(), loss_logit.item(), loss.item(), top1_err.item(), top5_err.item()
-        meter.iter_toc()
-        mb_size = inputs.size(0) * cfg.NUM_GPUS
-        meter.update_stats(top1_err, top5_err, loss_cls, loss_inter, loss_logit, loss, lr, mb_size)
-        meter.log_iter_stats(cur_epoch, cur_iter)
-        meter.iter_tic()
+        space_counter += 1
+        if not cfg.DISTILLATION.SPACE:
+            with amp.autocast(enabled=cfg.TRAIN.MIXED_PRECISION):
+                preds = model(inputs)
+                loss_cls = loss_fun(preds, labels_one_hot)
+                loss, loss_inter, loss_logit = loss_cls, inputs.new_tensor(0.0), inputs.new_tensor(0.0)
+                if hasattr(net.unwrap_model(model), 'guidance_loss'):
+                    if cfg.DISTILLATION.ONLINE:
+                        preds_t, loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
+                        loss_cls_t = loss_fun(preds_t, labels_one_hot)
+                        loss_cls += loss_cls_t
+                    else:
+                        loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
+                    if cfg.DISTILLATION.ENABLE_LOGIT:
+                        loss_cls = loss_cls * (1 - cfg.DISTILLATION.LOGIT_WEIGHT)
+                        loss_logit = loss_logit * cfg.DISTILLATION.LOGIT_WEIGHT
+                        loss = loss_cls + loss_logit
+                    if cfg.DISTILLATION.ENABLE_INTER:
+                        loss_inter = loss_inter * cfg.DISTILLATION.INTER_WEIGHT
+                        loss = loss_cls + loss_inter
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            net.update_model_ema(model, ema, cur_epoch, cur_iter)
+            top1_err, top5_err = meters.topk_errors(preds, labels, [1, 5])
+            loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = dist.scaled_all_reduce([loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err])
+            loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = loss_cls.item(), loss_inter.item(), loss_logit.item(), loss.item(), top1_err.item(), top5_err.item()
+            meter.iter_toc()
+            mb_size = inputs.size(0) * cfg.NUM_GPUS
+            meter.update_stats(top1_err, top5_err, loss_cls, loss_inter, loss_logit, loss, lr, mb_size)
+            meter.log_iter_stats(cur_epoch, cur_iter)
+            meter.iter_tic()
+        else:
+            with amp.autocast(enabled=cfg.TRAIN.MIXED_PRECISION):
+                preds, preds_teacher = model(inputs, output_type='both')
+                loss_cls = loss_fun(preds, labels_one_hot)
+                loss_cls_teacher = loss_fun(preds_teacher, labels_one_hot)
+                loss, loss_inter, loss_logit = loss_cls_teacher, inputs.new_tensor(0.0), inputs.new_tensor(0.0)
+
+                dummy_loss = 0.0
+                for param in model.module.student_model.parameters():
+                    dummy_loss += param.sum() * 0.0
+                loss += dummy_loss
+
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            if space_counter >= len(loader) * cfg.DISTILLATION.SPACE_INTERVAL:
+                space_space_counter = 0
+                for _ in range(space_counter // len(loader) + 1):
+                    for _, (inputs_space, labels_space, offline_features_space) in enumerate(space_loader):
+                        inputs_space, labels_space = inputs_space.cuda(), labels_space.cuda(non_blocking=True)
+                        offline_features_space = [f.cuda() for f in offline_features_space]
+                        labels_one_hot_space = net.smooth_one_hot_labels(labels_space)
+                        inputs_space, labels_one_hot_space, labels_space = net.mixup(inputs_space, labels_one_hot_space)
+                        with amp.autocast(enabled=cfg.TRAIN.MIXED_PRECISION):
+                            preds = model(inputs_space, output_type='student')
+                            loss_cls = loss_fun(preds, labels_one_hot_space)
+                            loss, loss_inter, loss_logit = loss_cls, inputs_space.new_tensor(0.0), inputs_space.new_tensor(0.0)
+
+                            dummy_loss = 0.0
+                            for param in model.module.teacher_model.parameters():
+                                dummy_loss += param.sum() * 0.0
+                            loss += dummy_loss
+                            if hasattr(net.unwrap_model(model), 'guidance_loss'):
+                                loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs_space, offline_features_space)
+                                if cfg.DISTILLATION.ENABLE_LOGIT:
+                                    loss_cls = loss_cls * (1 - cfg.DISTILLATION.LOGIT_WEIGHT)
+                                    loss_logit = loss_logit * cfg.DISTILLATION.LOGIT_WEIGHT
+                                    loss = loss_cls + loss_logit
+                                if cfg.DISTILLATION.ENABLE_INTER:
+                                    loss_inter = loss_inter * cfg.DISTILLATION.INTER_WEIGHT
+                                    loss = loss_cls + loss_inter
+                        optimizer.zero_grad()
+                        scaler.scale(loss).backward()
+                        scaler.step(optimizer)
+                        scaler.update()
+                        top1_err, top5_err = meters.topk_errors(preds, labels_space, [1, 5])
+
+                        space_space_counter += 1
+                        if space_space_counter >= space_counter:
+                            space_counter = 0
+                            break
+            else:
+                top1_err, top5_err = meters.topk_errors(preds, labels, [1, 5])
+
+            net.update_model_ema(model, ema, cur_epoch, cur_iter)
+            loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = dist.scaled_all_reduce([loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err])
+            loss_cls, loss_inter, loss_logit, loss, top1_err, top5_err = loss_cls.item(), loss_inter.item(), loss_logit.item(), loss.item(), top1_err.item(), top5_err.item()
+            meter.iter_toc()
+            mb_size = inputs.size(0) * cfg.NUM_GPUS
+            meter.update_stats(top1_err, top5_err, loss_cls, loss_inter, loss_logit, loss, lr, mb_size)
+            meter.log_iter_stats(cur_epoch, cur_iter)
+            meter.iter_tic()
+
     meter.log_epoch_stats(cur_epoch)
     scheduler.step(cur_epoch + 1)
+    return space_counter
 
 
 @torch.no_grad()
@@ -160,6 +235,12 @@ def train_model():
         logger.info("Loaded initial weights from: {}".format(train_weights))
         cp.load_checkpoint(train_weights, model, ema)
     train_loader = data_loader.construct_train_loader()
+    if cfg.DISTILLATION.SPACE:
+        space_counter = 0
+        space_loader = data_loader.construct_train_loader()
+    else:
+        space_counter = 0
+        space_loader = None
     test_loader = data_loader.construct_test_loader()
     train_meter = meters.TrainMeter(len(train_loader))
     test_meter = meters.TestMeter(len(test_loader))
@@ -170,7 +251,7 @@ def train_model():
     logger.info("Start epoch: {}".format(start_epoch + 1))
     for cur_epoch in range(start_epoch, cfg.OPTIM.MAX_EPOCH):
         params = (train_loader, model, ema, loss_fun, optimizer, scheduler, scaler, train_meter)
-        train_epoch(*params, cur_epoch)
+        space_counter = train_epoch(*params, cur_epoch, space_loader, space_counter)
         test_epoch(test_loader, model, test_meter, cur_epoch)
         test_err = test_meter.get_epoch_stats(cur_epoch)["top1_err"]
         ema_err = 100.0

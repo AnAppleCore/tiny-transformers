@@ -1,11 +1,11 @@
-black==19.3b0
-isort==4.3.21
+black
+isort
 iopath
 flake8
 pyyaml
 matplotlib
 numpy
-opencv-python==4.2.0.34
+opencv-python
 parameterized
 setuptools
 simplejson
@@ -16,3 +16,4 @@ einops
 scipy
 tensorboard
 timm
+fvcore

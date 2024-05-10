@@ -48,7 +48,7 @@ def logit_distill_loss(logits_t, logits_s, loss_type, temperature):
 
 class DistillationWrapper(nn.Module):
 
-    def __init__(self, student_model, teacher_mode):
+    def __init__(self, student_model, teacher_model):
         super(DistillationWrapper, self).__init__()
         self.enable_inter = cfg.DISTILLATION.ENABLE_INTER
         self.inter_transform_type = cfg.DISTILLATION.INTER_TRANSFORM
@@ -56,15 +56,30 @@ class DistillationWrapper(nn.Module):
         self.teacher_idx = cfg.DISTILLATION.INTER_TEACHER_INDEX
         self.enable_logit = cfg.DISTILLATION.ENABLE_LOGIT
         self.logit_loss_type = cfg.DISTILLATION.LOGIT_LOSS
+        self.temperature = cfg.DISTILLATION.LOGIT_TEMP
         self.teacher_img_size = cfg.DISTILLATION.TEACHER_IMG_SIZE
         self.offline = cfg.DISTILLATION.OFFLINE
+        self.online = cfg.DISTILLATION.ONLINE
+        self.space = cfg.DISTILLATION.SPACE
+        self.space_interval = cfg.DISTILLATION.SPACE_INTERVAL
         assert not self.offline or not self.enable_logit, 'Logit distillation is not supported when offline is enabled.'
 
         self.student_model = student_model
+        self.teacher_model = teacher_model
+        if cfg.DISTILLATION.TEACHER_MODEL == 'DeiT':
+            self.teacher_model.num_tokens -= 1
+            self.teacher_model.pos_embed = nn.Parameter(self.teacher_model.pos_embed[0, 1:, :].unsqueeze(0))
 
-        self.teacher_model = teacher_mode
-        for p in self.teacher_model.parameters():
-            p.requires_grad = False
+            if self.online or self.space:
+                for p in self.teacher_model.distill_head.parameters():
+                    p.requires_grad = False
+            else:
+                self.teacher_model.distill_token = None
+                self.teacher_model.distill_head = None
+
+        if not self.online and not self.space:
+            for p in self.teacher_model.parameters():
+                p.requires_grad = False
         logger.info("Build teacher model {}".format(type(self.teacher_model)))
 
         teacher_weights = cfg.DISTILLATION.TEACHER_WEIGHTS
@@ -73,7 +88,7 @@ class DistillationWrapper(nn.Module):
             logger.info("Loaded initial weights of teacher model from: {}".format(teacher_weights))
             self.teacher_model.load_state_dict(checkpoint)
 
-        if self.inter_transform_type == 'linear':
+        if self.inter_transform_type == 'linear' and self.enable_inter:
             self.feature_transforms = nn.ModuleList()
             for i, j in zip(self.student_idx, self.teacher_idx):
                 self.feature_transforms.append(nn.Conv2d(self.student_model.feature_dims[i], self.teacher_model.feature_dims[j], 1))
@@ -84,8 +99,14 @@ class DistillationWrapper(nn.Module):
     def state_dict(self, destination=None, prefix='', keep_vars=False):
         return self.student_model.state_dict(destination, prefix, keep_vars)
 
-    def forward(self, x):
-        return self.student_model(x)
+    def forward(self, x, output_type='student'):
+
+        if output_type == 'teacher':
+            return self.teacher_model(x)
+        elif output_type == 'student':
+            return self.student_model(x)
+        elif output_type == 'both':
+            return self.student_model(x), self.teacher_model(x)
 
     def complexity(self):
         complexity = dict()
@@ -97,11 +118,16 @@ class DistillationWrapper(nn.Module):
 
     def guidance_loss(self, x, offline_feats):
         logits_s = self.student_model.distill_logits
+        if logits_s is None:
+            logits_s = self.student_model(x)
         feats_s = self.student_model.features
 
         if self.offline:
             logits_t = None
             feats_t = offline_feats
+        elif self.online:
+            logits_t = self.teacher_model(x)
+            # feats_t = self.teacher_model.features
         else:
             x = F.interpolate(x, size=(self.teacher_img_size, self.teacher_img_size), mode='bilinear', align_corners=False)
             with torch.no_grad():
@@ -122,6 +148,9 @@ class DistillationWrapper(nn.Module):
                 feat_s = F.interpolate(feat_s, dsize, mode='bilinear', align_corners=False)
                 loss_inter = loss_inter + inter_distill_loss(feat_t, feat_s, self.inter_transform_type)
 
-        loss_logit = logit_distill_loss(logits_t, logits_s, self.logit_loss_type) if self.enable_logit else x.new_tensor(0.0)
-
-        return loss_inter, loss_logit
+        if self.online:
+            loss_logit = logit_distill_loss(logits_t.detach(), logits_s, self.logit_loss_type, self.temperature) if self.enable_logit else x.new_tensor(0.0)
+            return logits_t, loss_inter, loss_logit
+        else:
+            loss_logit = logit_distill_loss(logits_t, logits_s, self.logit_loss_type, self.temperature) if self.enable_logit else x.new_tensor(0.0)
+            return loss_inter, loss_logit

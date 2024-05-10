@@ -68,7 +68,17 @@ def compute_time_train(model, loss_fun):
             loss_cls = loss_fun(preds, labels_one_hot)
             loss, loss_inter, loss_logit = loss_cls, inputs.new_tensor(0.0), inputs.new_tensor(0.0)
             if hasattr(net.unwrap_model(model), 'guidance_loss'):
-                loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
+                if cfg.DISTILLATION.SPACE:
+                    logits_t = model(inputs, output_type='teacher')
+                    loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
+                    loss_cls_t = loss_fun(logits_t, labels_one_hot)
+                    loss_cls += loss_cls_t
+                if cfg.DISTILLATION.ONLINE:
+                    logits_t, loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
+                    loss_cls_t = loss_fun(logits_t, labels_one_hot)
+                    loss_cls += loss_cls_t
+                else:
+                    loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs, offline_features)
                 if cfg.DISTILLATION.ENABLE_LOGIT:
                     loss_cls = loss_cls * (1 - cfg.DISTILLATION.LOGIT_WEIGHT)
                     loss_logit = loss_logit * cfg.DISTILLATION.LOGIT_WEIGHT
