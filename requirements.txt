@@ -7,7 +7,7 @@ matplotlib
 numpy
 opencv-python
 parameterized
-setuptools
+setuptools==59.5.0
 simplejson
 submitit
 yacs
