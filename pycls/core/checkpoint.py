@@ -88,6 +88,43 @@ def save_checkpoint(model, model_ema, optimizer, epoch, test_err, ema_err):
     return checkpoint_file
 
 
+def save_checkpoint_last(model, model_ema, optimizer, epoch, test_err, ema_err):
+    '''
+    Only save the last checkpoint and the best checkpoint.
+    '''
+
+    if not dist.is_main_proc():
+        return
+    pathmgr.mkdirs(get_checkpoint_dir())
+    checkpoint = {
+        "epoch": epoch,
+        "test_err": test_err,
+        "ema_err": ema_err,
+        "model_state": unwrap_model(model).state_dict(),
+        "ema_state": unwrap_model(model_ema).state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "cfg": cfg.dump(),
+    }
+    checkpoint_file = os.path.join(get_checkpoint_dir(), 'latest.pyth')
+    with pathmgr.open(checkpoint_file, "wb") as f:
+        torch.save(checkpoint, f)
+    if not pathmgr.exists(get_checkpoint_best()):
+        pathmgr.copy(checkpoint_file, get_checkpoint_best())
+    else:
+        with pathmgr.open(get_checkpoint_best(), "rb") as f:
+            best = torch.load(f, map_location="cpu")
+        if test_err < best["test_err"] or ema_err < best["ema_err"]:
+            if test_err < best["test_err"]:
+                best["model_state"] = checkpoint["model_state"]
+                best["test_err"] = test_err
+            if ema_err < best["ema_err"]:
+                best["ema_state"] = checkpoint["ema_state"]
+                best["ema_err"] = ema_err
+            with pathmgr.open(get_checkpoint_best(), "wb") as f:
+                torch.save(best, f)
+    return checkpoint_file
+
+
 def load_checkpoint(checkpoint_file, model, model_ema=None, optimizer=None):
     err_str = "Checkpoint '{}' not found"
     assert pathmgr.exists(checkpoint_file), err_str.format(checkpoint_file)
