@@ -4,13 +4,14 @@ import re
 from PIL import Image
 from torch.utils.data import Dataset
 
+from .base import BaseDataset
 import pycls.core.logging as logging
 
 
 logger = logging.get_logger(__name__)
 
 
-class TinyImageNet(Dataset):
+class TinyImageNet(BaseDataset):
 
     def __init__(self, data_path, split):
         super(TinyImageNet, self).__init__(split)
