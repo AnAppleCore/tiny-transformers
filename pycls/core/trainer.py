@@ -136,8 +136,12 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scheduler, scaler, mete
                 loss, loss_inter, loss_logit = loss_cls_teacher, inputs.new_tensor(0.0), inputs.new_tensor(0.0)
 
                 dummy_loss = 0.0
-                for param in model.module.student_model.parameters():
-                    dummy_loss += param.sum() * 0.0
+                if hasattr(model, 'module'):
+                    for param in model.module.student_model.parameters():
+                        dummy_loss += param.sum() * 0.0
+                else:
+                    for param in model.student_model.parameters():
+                        dummy_loss += param.sum() * 0.0
                 loss += dummy_loss
 
             optimizer.zero_grad()
@@ -159,8 +163,12 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scheduler, scaler, mete
                             loss, loss_inter, loss_logit = loss_cls, inputs_space.new_tensor(0.0), inputs_space.new_tensor(0.0)
 
                             dummy_loss = 0.0
-                            for param in model.module.teacher_model.parameters():
-                                dummy_loss += param.sum() * 0.0
+                            if hasattr(model, 'module'):
+                                for param in model.module.teacher_model.parameters():
+                                    dummy_loss += param.sum() * 0.0
+                            else:
+                                for param in model.teacher_model.parameters():
+                                    dummy_loss += param.sum() * 0.0
                             loss += dummy_loss
                             if hasattr(net.unwrap_model(model), 'guidance_loss'):
                                 loss_inter, loss_logit = net.unwrap_model(model).guidance_loss(inputs_space, offline_features_space)
