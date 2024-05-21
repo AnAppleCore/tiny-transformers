@@ -73,6 +73,7 @@ class DistillationWrapper(nn.Module):
             if self.online or self.space:
                 for p in self.teacher_model.distill_head.parameters():
                     p.requires_grad = False
+                self.teacher_model.distill_token.requires_grad = False
             else:
                 self.teacher_model.distill_token = None
                 self.teacher_model.distill_head = None
