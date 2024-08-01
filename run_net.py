@@ -11,8 +11,9 @@ https://github.com/facebookresearch/pycls/blob/main/tools/run_net.py
 """
 
 import argparse
-import sys
 import os
+import sys
+import time
 
 import pycls.core.config as config
 import pycls.core.distributed as dist
@@ -40,7 +41,7 @@ def main():
     config.load_cfg(args.cfg)
     cfg.merge_from_list(args.opts)
     if cfg.OUT_DIR is None:
-        out_dir = os.path.join('work_dirs', os.path.splitext(os.path.basename(args.cfg))[0])
+        out_dir = os.path.join('work_dirs', os.path.splitext(os.path.basename(args.cfg))[0]+time.strftime('-%Y-%m-%d_%H-%M-%S', time.localtime()), )
         cfg.OUT_DIR = out_dir
     config.assert_cfg()
     cfg.freeze()
