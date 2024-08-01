@@ -18,17 +18,18 @@ from pycls.datasets.cifar100 import Cifar100
 from pycls.datasets.flowers import Flowers
 from pycls.datasets.chaoyang import Chaoyang
 from pycls.datasets.tiny_imagenet import TinyImageNet
+from pycls.datasets.imagenet import ImageNet
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.sampler import RandomSampler
 
 
-_DATASETS = {'cifar100': Cifar100, 'flowers': Flowers, "chaoyang": Chaoyang, "tiny_imagenet": TinyImageNet}
+_DATASETS = {'cifar100': Cifar100, 'flowers': Flowers, "chaoyang": Chaoyang, "tiny_imagenet": TinyImageNet, "imagenet": ImageNet}
 
 _DATA_DIR = os.path.join('.', "data")
 if not os.path.exists(_DATA_DIR):
     os.makedirs(_DATA_DIR)
 
-_PATHS = {"cifar100": "", 'flowers': "flowers", "chaoyang": "chaoyang", "tiny_imagenet": "tiny-imagenet-200"}
+_PATHS = {"cifar100": "", 'flowers': "flowers", "chaoyang": "chaoyang", "tiny_imagenet": "tiny-imagenet-200", "imagenet": "ImageNet"}
 
 
 def _construct_loader(dataset_name, split, batch_size, shuffle, drop_last):
