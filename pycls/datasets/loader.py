@@ -23,13 +23,13 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.sampler import RandomSampler
 
 
-_DATASETS = {'cifar100': Cifar100, 'flowers': Flowers, "chaoyang": Chaoyang, "tiny_imagenet": TinyImageNet, "imagenet": ImageNet}
+_DATASETS = {'cifar100': Cifar100, 'flowers': Flowers, "chaoyang": Chaoyang, "tiny_imagenet": TinyImageNet, "imagenet": ImageNet, "imagenet_100": ImageNet}
 
 _DATA_DIR = os.path.join('.', "data")
 if not os.path.exists(_DATA_DIR):
     os.makedirs(_DATA_DIR)
 
-_PATHS = {"cifar100": "", 'flowers': "flowers", "chaoyang": "chaoyang", "tiny_imagenet": "tiny-imagenet-200", "imagenet": "ImageNet"}
+_PATHS = {"cifar100": "", 'flowers': "flowers", "chaoyang": "chaoyang", "tiny_imagenet": "tiny-imagenet-200", "imagenet": "ImageNet", "imagenet_100": "ImageNet-100"}
 
 
 def _construct_loader(dataset_name, split, batch_size, shuffle, drop_last):
