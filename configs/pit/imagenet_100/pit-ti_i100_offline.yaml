@@ -27,7 +27,7 @@ DISTILLATION:
   LOGIT_TEMP: 1.0
   LOGIT_WEIGHT: 0.5
   TEACHER_MODEL: PiT
-  TEACHER_WEIGHTS: work_dirs/pit-ti_t200_base/model.pyth
+  TEACHER_WEIGHTS: work_dirs/pit-ti_i100_base-2024-08-03_13-56-58/model.pyth
   TEACHER_IMG_SIZE: 224
   ONLINE: False
   SPACE: False
@@ -49,7 +49,7 @@ TEST:
   DATASET: imagenet_100
   SPLIT: val
   BATCH_SIZE: 200
-NUM_GPUS: 4
+NUM_GPUS: 2
 DATA_LOADER:
   NUM_WORKERS: 4
 CUDNN:
